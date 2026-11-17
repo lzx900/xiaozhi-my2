@@ -1,0 +1,73 @@
+name: Build My Board
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build waveshare esp32-s3-rlcd-4.2
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Extract source zip
+        shell: bash
+        run: |
+          set -e
+          ZIP=$(ls *.zip 2>/dev/null | head -n 1)
+          if [ -z "$ZIP" ]; then
+            echo "::error::仓库根目录没有找到 zip 压缩包"
+            exit 1
+          fi
+          echo "找到压缩包: $ZIP"
+          python - <<'PYEOF'
+          import zipfile, glob, os, shutil
+          z = glob.glob('*.zip')[0]
+          with zipfile.ZipFile(z) as zf:
+              for info in zf.infolist():
+                  name = info.filename.replace('\\', '/').lstrip('/')
+                  if not name or name.endswith('/'):
+                      continue
+                  target = os.path.join('src', name)
+                  os.makedirs(os.path.dirname(target), exist_ok=True)
+                  with zf.open(info) as s, open(target, 'wb') as d:
+                      shutil.copyfileobj(s, d)
+          print('解压完成')
+          PYEOF
+          PROJ="src"
+          if [ ! -f "src/CMakeLists.txt" ] || [ ! -d "src/main" ]; then
+            PROJ=""
+            for f in $(find src -maxdepth 3 -name CMakeLists.txt 2>/dev/null); do
+              d=$(dirname "$f")
+              if [ -d "$d/main" ]; then
+                PROJ="$d"
+                break
+              fi
+            done
+          fi
+          if [ -z "$PROJ" ]; then
+            echo "::error::压缩包里找不到工程目录"
+            exit 1
+          fi
+          echo "PROJECT_DIR=$PROJ" >> "$GITHUB_ENV"
+          echo "工程目录: $PROJ"
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          source "$IDF_PATH/export.sh"
+          cd "$PROJECT_DIR"
+          python scripts/build.py waveshare/esp32-s3-rlcd-4.2
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v3
+        with:
+          name: xiaozhi-rlcd42-firmware
+          path: ${{ env.PROJECT_DIR }}/build/merged-binary.bin
+          if-no-files-found: error
